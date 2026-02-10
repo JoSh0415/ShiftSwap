@@ -1,184 +1,265 @@
-'use client';
+'use client'
 
-import Link from 'next/link';
-import { useShiftSwap } from '../hooks/useShiftSwap';
+import { useState, useEffect } from 'react'
+import { useSession, useShifts } from '@/app/hooks/useShiftSwap'
+import { Navbar, Card, StatusBadge, Spinner, EmptyState, Toast, formatShiftDate, formatShiftDateLong } from '@/app/components/ui'
+import { Clock, Hand, CheckCircle2, AlertTriangle } from 'lucide-react'
 
-export default function StaffPage() {
-  const { state, acting, needsSubscription, subscribe, sendAction } = useShiftSwap('staff');
-  const step = state?.step ?? 'IDLE';
+export default function StaffDashboard() {
+  const { session, loading: sessionLoading } = useSession()
+  const { shifts, claimShift, cancelShift } = useShifts(4000)
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!sessionLoading && (!session?.authenticated || session.member?.role !== 'STAFF')) {
+      window.location.href = '/'
+    }
+  }, [session, sessionLoading])
+
+  if (sessionLoading || !session?.authenticated) return <Spinner />
+
+  const memberId = session.member?.id
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+    setToast({ message, type })
+    setTimeout(() => setToast(null), 4000)
+  }
+
+  const handleClaim = async (shiftId: string, version: number) => {
+    setActionLoading(shiftId)
+    const res = await claimShift(shiftId, version)
+    setActionLoading(null)
+    if (res.ok) {
+      showToast('Shift claimed — waiting for manager approval')
+    } else {
+      showToast(res.error || 'Failed to claim shift', 'error')
+    }
+  }
+
+  const handleCancelClaim = async (shiftId: string, version: number) => {
+    if (!confirm('Cancel your claim on this shift?')) return
+    setActionLoading(shiftId)
+    const res = await cancelShift(shiftId, version)
+    setActionLoading(null)
+    if (res.ok) showToast('Claim cancelled')
+    else showToast(res.error || 'Failed to cancel', 'error')
+  }
+
+  const availableShifts = shifts.filter(
+    (s) => s.status === 'POSTED' && s.originalOwner.id !== memberId
+  )
+  const myPostedShifts = shifts.filter(
+    (s) => s.originalOwner.id === memberId && ['POSTED', 'CLAIMED'].includes(s.status)
+  )
+  const myClaimedShifts = shifts.filter(
+    (s) => s.claimedBy?.id === memberId && s.status === 'CLAIMED'
+  )
+  const myApprovedShifts = shifts.filter(
+    (s) => (s.claimedBy?.id === memberId || s.originalOwner.id === memberId) && s.status === 'APPROVED'
+  )
 
   return (
-    <div className="min-h-dvh bg-[var(--background)] flex flex-col font-sans text-white">
-      {/* ── Header ──────────────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-40 backdrop-blur-xl bg-[var(--background)]/80 border-b border-[var(--card-border)]">
-        <div className="max-w-lg mx-auto flex items-center justify-between px-5 py-4">
-          <Link href="/" className="flex items-center gap-3 active:opacity-70 transition-opacity">
-            <div className="w-9 h-9 rounded-xl bg-emerald-600 flex items-center justify-center shadow-md shadow-emerald-600/20">
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-              </svg>
-            </div>
-            <div>
-              <h1 className="text-base font-bold leading-tight">Staff</h1>
-              <p className="text-[11px] text-gray-500 font-medium">ShiftSwap</p>
-            </div>
-          </Link>
-
-          <div className="flex items-center gap-3">
-            {step === 'POSTED' && (
-              <span className="relative flex h-2.5 w-2.5">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
-              </span>
-            )}
-            <div className={`w-2 h-2 rounded-full ${state ? 'bg-emerald-500' : 'bg-gray-600'}`} />
-          </div>
+    <>
+      <Navbar />
+      <main className="mx-auto max-w-3xl px-4 sm:px-6 py-6">
+        {/* Header */}
+        <div className="mb-6">
+          <h1 className="text-xl font-semibold text-zinc-100">Dashboard</h1>
+          <p className="text-sm text-zinc-500 mt-0.5">Welcome back, {session.member?.name}</p>
         </div>
-      </header>
 
-      {/* ── Body ────────────────────────────────────────────────────────── */}
-      <main className="flex-1 flex flex-col items-center px-5 py-6 max-w-lg mx-auto w-full">
+        {/* Stats */}
+        <div className="mb-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {[
+            { label: 'Available', value: availableShifts.length, icon: Clock, color: 'text-blue-400' },
+            { label: 'My Claims', value: myClaimedShifts.length, icon: Hand, color: 'text-amber-400' },
+            { label: 'My Swaps', value: myPostedShifts.length, icon: AlertTriangle, color: 'text-zinc-400' },
+            { label: 'Approved', value: myApprovedShifts.length, icon: CheckCircle2, color: 'text-emerald-400' },
+          ].map((stat) => (
+            <div key={stat.label} className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
+              <div className={`flex items-center justify-center gap-1.5 ${stat.color} mb-0.5`}>
+                <stat.icon className="h-3.5 w-3.5" />
+                <span className="text-xl font-semibold">{stat.value}</span>
+              </div>
+              <p className="text-[11px] text-zinc-500 uppercase tracking-wider">{stat.label}</p>
+            </div>
+          ))}
+        </div>
+
         {/* Notification banner */}
-        {needsSubscription && (
-          <button
-            onClick={subscribe}
-            className="w-full mb-5 flex items-center gap-3 p-4 bg-emerald-600/10 border border-emerald-500/20 rounded-xl text-left active:scale-[0.98] transition-transform"
-          >
-            <div className="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center flex-shrink-0">
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-              </svg>
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-emerald-400">Enable notifications</p>
-              <p className="text-xs text-gray-500 mt-0.5">Get alerted when new shifts are posted</p>
-            </div>
-          </button>
-        )}
-
-        {/* ── IDLE ────────────────────────────────────────────────────── */}
-        {step === 'IDLE' && (
-          <div className="state-enter flex-1 flex flex-col items-center justify-center text-center py-16 w-full">
-            <div className="w-20 h-20 rounded-2xl bg-white/5 flex items-center justify-center mb-5">
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-10 h-10 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-              </svg>
-            </div>
-            <h2 className="text-xl font-bold text-gray-300 mb-2">No shifts right now</h2>
-            <p className="text-sm text-gray-600 max-w-[240px]">
-              We&apos;ll send you a notification the moment something comes in.
-            </p>
-          </div>
-        )}
-
-        {/* ── POSTED — Shift available ────────────────────────────────── */}
-        {step === 'POSTED' && (
-          <div className="state-enter w-full space-y-5">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-500/10 text-red-400 text-xs font-bold uppercase tracking-wider">
-                <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
-                New shift
-              </span>
-            </div>
-
-            <div className="bg-[var(--card)] border border-[var(--card-border)] rounded-2xl overflow-hidden">
-              {/* Shift header */}
-              <div className="px-6 pt-6 pb-4">
-                <div className="flex items-start justify-between mb-4">
-                  <div>
-                    <h2 className="text-xl font-bold text-white">Bar Staff</h2>
-                    <p className="text-sm text-gray-500 mt-0.5">Friday evening shift</p>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-lg font-bold text-emerald-400">£11</span>
-                    <span className="text-xs text-gray-500">/hr</span>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 text-sm text-gray-300">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                    </svg>
-                    Friday
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 text-sm text-gray-300">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    18:00 – 23:00
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 text-sm text-gray-300">
-                    5 hours
-                  </span>
-                </div>
-              </div>
-
-              {/* Earnings estimate */}
-              <div className="mx-6 mb-4 p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/10">
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Est. earnings</span>
-                  <span className="text-base font-bold text-emerald-400">£55.00</span>
-                </div>
-              </div>
-
-              {/* Claim button */}
-              <div className="px-6 pb-6">
-                <button
-                  onClick={() => sendAction('CLAIM_SHIFT')}
-                  disabled={acting}
-                  className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl font-bold text-base shadow-lg shadow-emerald-600/20 active:scale-[0.97] transition-all"
-                >
-                  Claim this shift
-                </button>
-              </div>
+        {myClaimedShifts.length > 0 && (
+          <div className="mb-6 flex items-center gap-3 rounded-md border border-amber-500/20 bg-amber-500/5 px-4 py-3">
+            <div className="h-2 w-2 rounded-full bg-amber-500 shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-amber-200">
+                {myClaimedShifts.length} claim{myClaimedShifts.length > 1 ? 's' : ''} awaiting approval
+              </p>
+              <p className="text-xs text-amber-200/50 mt-0.5">Your manager will review your claims soon</p>
             </div>
           </div>
         )}
 
-        {/* ── CLAIMED — Waiting ───────────────────────────────────────── */}
-        {step === 'CLAIMED' && (
-          <div className="state-enter flex-1 flex flex-col items-center justify-center text-center py-16 w-full">
-            <div className="w-16 h-16 rounded-full border-[3px] border-blue-500 border-t-transparent spinner mb-6" />
-            <h2 className="text-lg font-bold text-white mb-2">Waiting for approval</h2>
-            <p className="text-sm text-gray-500 max-w-[240px]">
-              Your manager has been notified. Sit tight — we&apos;ll let you know the moment they respond.
-            </p>
-          </div>
-        )}
-
-        {/* ── APPROVED — Confirmed ────────────────────────────────────── */}
-        {step === 'APPROVED' && (
-          <div className="state-enter w-full space-y-5">
-            <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-2xl p-8 text-center">
-              <div className="w-16 h-16 mx-auto rounded-2xl bg-emerald-500/10 flex items-center justify-center mb-4">
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
+        <div className="space-y-8">
+          {/* Available shifts */}
+          <section>
+            <h2 className="text-xs font-medium uppercase tracking-wider text-zinc-500 mb-3 flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5" /> Available Shifts ({availableShifts.length})
+            </h2>
+            {availableShifts.length > 0 ? (
+              <div className="space-y-2">
+                {availableShifts.map((shift) => (
+                  <Card key={shift.id}>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-medium text-zinc-100">{shift.title}</span>
+                          <StatusBadge status={shift.status} />
+                        </div>
+                        <p className="text-sm text-zinc-500">
+                          {formatShiftDateLong(shift.date)}
+                        </p>
+                        <p className="text-sm text-zinc-500">
+                          {shift.startTime} – {shift.endTime}
+                        </p>
+                        <p className="text-sm text-zinc-500 mt-1">
+                          Covering for <span className="text-zinc-300">{shift.originalOwner.name}</span>
+                          {shift.originalOwner.staffRole && <span className="text-zinc-600"> ({shift.originalOwner.staffRole})</span>}
+                        </p>
+                        {shift.reason && (
+                          <p className="text-xs text-zinc-600 mt-1">Reason: {shift.reason}</p>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => handleClaim(shift.id, shift.version)}
+                        disabled={actionLoading === shift.id}
+                        className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                      >
+                        {actionLoading === shift.id ? (
+                          <>
+                            <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                            Claiming...
+                          </>
+                        ) : (
+                          <>
+                            <Hand className="h-4 w-4" /> Claim Shift
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </Card>
+                ))}
               </div>
-              <h2 className="text-xl font-bold text-white mb-1">You&apos;re confirmed!</h2>
-              <p className="text-sm text-gray-500 mb-6">The shift has been added to your schedule</p>
+            ) : (
+              <EmptyState
+                icon="📋"
+                title="No available shifts"
+                description="When a colleague posts a shift for swap, it'll appear here."
+              />
+            )}
+          </section>
 
-              <div className="bg-black/20 rounded-xl p-4 space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Role</span>
-                  <span className="text-sm text-white font-medium">Bar Staff</span>
-                </div>
-                <div className="h-px bg-white/5" />
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold">When</span>
-                  <span className="text-sm text-white font-medium">Fri 18:00 – 23:00</span>
-                </div>
-                <div className="h-px bg-white/5" />
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Pay</span>
-                  <span className="text-sm text-emerald-400 font-bold">£55.00</span>
-                </div>
+          {/* My posted shifts */}
+          {myPostedShifts.length > 0 && (
+            <section>
+              <h2 className="text-xs font-medium uppercase tracking-wider text-zinc-500 mb-3 flex items-center gap-1.5">
+                <AlertTriangle className="h-3.5 w-3.5" /> My Shift Swaps ({myPostedShifts.length})
+              </h2>
+              <div className="space-y-2">
+                {myPostedShifts.map((shift) => (
+                  <Card key={shift.id}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-medium text-zinc-100">{shift.title}</span>
+                      <StatusBadge status={shift.status} />
+                    </div>
+                    <p className="text-sm text-zinc-500">
+                      {formatShiftDate(shift.date)} · {shift.startTime} – {shift.endTime}
+                    </p>
+                    {shift.status === 'CLAIMED' && shift.claimedBy && (
+                      <p className="text-sm text-amber-400 mt-1.5">
+                        {shift.claimedBy.name} wants to cover — awaiting manager approval
+                      </p>
+                    )}
+                    {shift.status === 'POSTED' && (
+                      <p className="text-sm text-zinc-600 mt-1.5">Waiting for someone to claim</p>
+                    )}
+                  </Card>
+                ))}
               </div>
-            </div>
-          </div>
-        )}
+            </section>
+          )}
+
+          {/* Pending claims */}
+          {myClaimedShifts.length > 0 && (
+            <section>
+              <h2 className="text-xs font-medium uppercase tracking-wider text-zinc-500 mb-3 flex items-center gap-1.5">
+                <Hand className="h-3.5 w-3.5" /> Pending Claims ({myClaimedShifts.length})
+              </h2>
+              <div className="space-y-2">
+                {myClaimedShifts.map((shift) => (
+                  <Card key={shift.id} className="!border-amber-500/15">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-medium text-zinc-100">{shift.title}</span>
+                          <StatusBadge status={shift.status} />
+                        </div>
+                        <p className="text-sm text-zinc-500">
+                          {formatShiftDate(shift.date)} · {shift.startTime} – {shift.endTime}
+                        </p>
+                        <p className="text-sm text-zinc-500 mt-1">
+                          Covering for {shift.originalOwner.name}
+                        </p>
+                        <p className="text-xs text-amber-500/60 mt-1">Waiting for manager approval</p>
+                      </div>
+                      <button
+                        onClick={() => handleCancelClaim(shift.id, shift.version)}
+                        disabled={actionLoading === shift.id}
+                        className="rounded-md border border-zinc-800 px-3 py-1.5 text-sm text-zinc-500 hover:text-red-400 hover:border-red-800 transition-colors disabled:opacity-50 shrink-0"
+                      >
+                        Cancel Claim
+                      </button>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Approved */}
+          {myApprovedShifts.length > 0 && (
+            <section>
+              <h2 className="text-xs font-medium uppercase tracking-wider text-zinc-500 mb-3 flex items-center gap-1.5">
+                <CheckCircle2 className="h-3.5 w-3.5" /> Approved ({myApprovedShifts.length})
+              </h2>
+              <div className="space-y-2">
+                {myApprovedShifts.map((shift) => (
+                  <Card key={shift.id} className="!border-emerald-500/15">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-medium text-zinc-100">{shift.title}</span>
+                      <StatusBadge status={shift.status} />
+                    </div>
+                    <p className="text-sm text-zinc-500">
+                      {formatShiftDate(shift.date)} · {shift.startTime} – {shift.endTime}
+                    </p>
+                    {shift.claimedBy?.id === memberId ? (
+                      <p className="text-sm text-emerald-400 mt-1.5">
+                        You&apos;re covering for {shift.originalOwner.name}
+                      </p>
+                    ) : (
+                      <p className="text-sm text-emerald-400 mt-1.5">
+                        {shift.claimedBy?.name} is covering your shift
+                      </p>
+                    )}
+                  </Card>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
       </main>
-    </div>
-  );
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </>
+  )
 }

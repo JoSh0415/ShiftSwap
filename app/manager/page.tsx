@@ -1,261 +1,529 @@
-'use client';
+'use client'
 
-import Link from 'next/link';
-import { useShiftSwap } from '../hooks/useShiftSwap';
+import { useState, useEffect } from 'react'
+import { useSession, useOrg, useMembers, useShifts, useChangelog } from '@/app/hooks/useShiftSwap'
+import { Navbar, Card, StatusBadge, Spinner, EmptyState, Toast, formatShiftDate } from '@/app/components/ui'
+import { Copy, Download, RefreshCw, Users, Plus, ClipboardList, History, Check, X, Trash2, Share2 } from 'lucide-react'
 
-// ── Step indicator ──────────────────────────────────────────────────────────
-function StepIndicator({ step }: { step: string }) {
-  const steps = [
-    { key: 'IDLE', label: 'Post' },
-    { key: 'POSTED', label: 'Waiting' },
-    { key: 'CLAIMED', label: 'Review' },
-    { key: 'APPROVED', label: 'Done' },
-  ];
-  const currentIdx = steps.findIndex((s) => s.key === step);
+type Tab = 'shifts' | 'team' | 'history'
+
+export default function ManagerDashboard() {
+  const { session, loading: sessionLoading } = useSession()
+  const { org, regenerateCode } = useOrg()
+  const { members, fetchMembers, removeMember } = useMembers()
+  const { shifts, postShift, approveShift, declineShift, cancelShift, fetchShifts } = useShifts(4000)
+  const { logs, fetchLogs } = useChangelog()
+
+  const [tab, setTab] = useState<Tab>('shifts')
+  const [showPostForm, setShowPostForm] = useState(false)
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
+
+  const [formTitle, setFormTitle] = useState('')
+  const [formDate, setFormDate] = useState('')
+  const [formStartTime, setFormStartTime] = useState('')
+  const [formEndTime, setFormEndTime] = useState('')
+  const [formReason, setFormReason] = useState('')
+  const [formOwnerId, setFormOwnerId] = useState('')
+
+  useEffect(() => {
+    if (!sessionLoading && (!session?.authenticated || session.member?.role !== 'MANAGER')) {
+      window.location.href = '/'
+    }
+  }, [session, sessionLoading])
+
+  if (sessionLoading || !session?.authenticated) return <Spinner />
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+    setToast({ message, type })
+    setTimeout(() => setToast(null), 4000)
+  }
+
+  const handlePostShift = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!formOwnerId) { showToast('Select a staff member', 'error'); return }
+    setActionLoading('post')
+    const res = await postShift({
+      title: formTitle,
+      date: formDate,
+      startTime: formStartTime,
+      endTime: formEndTime,
+      reason: formReason,
+      originalOwnerId: formOwnerId,
+    })
+    setActionLoading(null)
+    if (res.ok) {
+      showToast('Shift posted successfully')
+      setShowPostForm(false)
+      setFormTitle(''); setFormDate(''); setFormStartTime(''); setFormEndTime(''); setFormReason(''); setFormOwnerId('')
+    } else {
+      showToast(res.error || 'Failed to post shift', 'error')
+    }
+  }
+
+  const handleApprove = async (shiftId: string, version: number) => {
+    setActionLoading(shiftId)
+    const res = await approveShift(shiftId, version)
+    setActionLoading(null)
+    if (res.ok) showToast('Shift swap approved')
+    else showToast(res.error || 'Failed to approve', 'error')
+  }
+
+  const handleDecline = async (shiftId: string, version: number) => {
+    setActionLoading(shiftId)
+    const res = await declineShift(shiftId, version)
+    setActionLoading(null)
+    if (res.ok) showToast('Claim declined')
+    else showToast(res.error || 'Failed to decline', 'error')
+  }
+
+  const handleCancel = async (shiftId: string, version: number) => {
+    if (!confirm('Cancel this shift swap?')) return
+    setActionLoading(shiftId)
+    const res = await cancelShift(shiftId, version)
+    setActionLoading(null)
+    if (res.ok) showToast('Shift cancelled')
+    else showToast(res.error || 'Failed to cancel', 'error')
+  }
+
+  const handleRemoveMember = async (memberId: string, name: string) => {
+    if (!confirm(`Remove ${name} from the organisation?`)) return
+    const res = await removeMember(memberId)
+    if (res.ok) showToast(`${name} removed`)
+    else showToast('Failed to remove member', 'error')
+  }
+
+  const handleCopyCode = () => {
+    if (org?.joinCode) {
+      navigator.clipboard.writeText(org.joinCode)
+      showToast('Join code copied')
+    }
+  }
+
+  const handleCopyLink = () => {
+    if (org?.joinCode) {
+      const link = `${window.location.origin}?code=${org.joinCode}`
+      navigator.clipboard.writeText(link)
+      showToast('Invite link copied')
+    }
+  }
+
+  const handleExport = (format: 'csv' | 'json') => {
+    window.open(`/api/export?format=${format}`, '_blank')
+    showToast(`Exporting as ${format.toUpperCase()}`, 'info')
+  }
+
+  const staffMembers = members.filter((m) => m.role === 'STAFF')
+  const pendingShifts = shifts.filter((s) => s.status === 'CLAIMED')
+  const postedShifts = shifts.filter((s) => s.status === 'POSTED')
+  const completedShifts = shifts.filter((s) => ['APPROVED', 'DECLINED', 'CANCELLED'].includes(s.status))
 
   return (
-    <div className="flex items-center justify-between w-full px-2">
-      {steps.map((s, i) => {
-        const done = i < currentIdx;
-        const active = i === currentIdx;
-        return (
-          <div key={s.key} className="flex items-center flex-1 last:flex-none">
-            <div className="flex flex-col items-center">
-              <div
-                className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
-                  done
-                    ? 'bg-blue-500 text-white'
-                    : active
-                    ? 'bg-blue-500/20 text-blue-400 ring-2 ring-blue-500'
-                    : 'bg-white/5 text-gray-600'
-                }`}
-              >
-                {done ? (
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
-                ) : (
-                  i + 1
-                )}
-              </div>
-              <span className={`text-[10px] mt-1.5 font-medium ${active ? 'text-blue-400' : 'text-gray-600'}`}>
-                {s.label}
-              </span>
-            </div>
-            {i < steps.length - 1 && (
-              <div className={`flex-1 h-px mx-2 mb-5 transition-colors duration-300 ${done ? 'bg-blue-500' : 'bg-white/10'}`} />
-            )}
+    <>
+      <Navbar />
+      <main className="mx-auto max-w-5xl px-4 sm:px-6 py-6">
+        {/* Header */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
+          <div>
+            <h1 className="text-xl font-semibold text-zinc-100">{org?.name || 'Organisation'}</h1>
+            <p className="text-sm text-zinc-500 mt-0.5">{org?.memberCount || 0} members · {shifts.length} shifts</p>
           </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// ── Main page ───────────────────────────────────────────────────────────────
-export default function ManagerPage() {
-  const { state, acting, needsSubscription, subscribe, sendAction } = useShiftSwap('manager');
-  const step = state?.step ?? 'IDLE';
-
-  return (
-    <div className="min-h-dvh bg-[var(--background)] flex flex-col font-sans text-white">
-      {/* ── Header ──────────────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-40 backdrop-blur-xl bg-[var(--background)]/80 border-b border-[var(--card-border)]">
-        <div className="max-w-lg mx-auto flex items-center justify-between px-5 py-4">
-          <div className="flex items-center gap-3">
-            <Link href="/" className="flex items-center gap-3 active:opacity-70 transition-opacity">
-              <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center shadow-md shadow-blue-600/20">
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2M9 5h6" />
-                </svg>
+          {org?.joinCode && (
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-1.5">
+                <span className="text-xs text-zinc-500">Code</span>
+                <span className="font-mono text-sm font-semibold tracking-widest text-zinc-200">{org.joinCode}</span>
               </div>
-              <div>
-                <h1 className="text-base font-bold leading-tight">Manager</h1>
-                <p className="text-[11px] text-gray-500 font-medium">ShiftSwap</p>
-              </div>
-            </Link>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {step !== 'IDLE' && (
-              <button
-                onClick={() => sendAction('RESET')}
-                className="p-2 rounded-lg text-gray-500 hover:text-white hover:bg-white/5 transition-colors"
-                title="Reset"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
+              <button onClick={handleCopyCode} className="rounded-md border border-zinc-800 p-1.5 text-zinc-500 hover:text-zinc-300 transition-colors" title="Copy code">
+                <Copy className="h-3.5 w-3.5" />
               </button>
-            )}
-            <div className={`w-2 h-2 rounded-full ${state ? 'bg-emerald-500' : 'bg-gray-600'}`} />
-          </div>
+              <button onClick={handleCopyLink} className="rounded-md border border-zinc-800 p-1.5 text-zinc-500 hover:text-zinc-300 transition-colors" title="Copy invite link">
+                <Share2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
         </div>
-      </header>
 
-      {/* ── Body ────────────────────────────────────────────────────────── */}
-      <main className="flex-1 flex flex-col items-center px-5 py-6 max-w-lg mx-auto w-full">
-        {/* Notification banner */}
-        {needsSubscription && (
-          <button
-            onClick={subscribe}
-            className="w-full mb-5 flex items-center gap-3 p-4 bg-blue-600/10 border border-blue-500/20 rounded-xl text-left active:scale-[0.98] transition-transform"
-          >
-            <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center flex-shrink-0">
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-              </svg>
+        {/* Pending alert */}
+        {pendingShifts.length > 0 && (
+          <div className="mb-6 flex items-center gap-3 rounded-md border border-amber-500/20 bg-amber-500/5 px-4 py-3">
+            <div className="h-2 w-2 rounded-full bg-amber-500 shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-amber-200">{pendingShifts.length} shift{pendingShifts.length > 1 ? 's' : ''} awaiting approval</p>
+              <p className="text-xs text-amber-200/50 mt-0.5">Review and approve or decline below</p>
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-blue-400">Enable notifications</p>
-              <p className="text-xs text-gray-500 mt-0.5">Get alerted when staff claim shifts</p>
-            </div>
-          </button>
+          </div>
         )}
 
-        {/* Progress */}
-        <div className="w-full mb-8">
-          <StepIndicator step={step} />
+        {/* Tabs */}
+        <div className="flex border-b border-zinc-800 mb-6">
+          {([
+            ['shifts', 'Shifts', ClipboardList],
+            ['team', 'Team', Users],
+            ['history', 'History', History],
+          ] as [Tab, string, typeof ClipboardList][]).map(([t, label, Icon]) => (
+            <button
+              key={t}
+              onClick={() => { setTab(t); if (t === 'history') fetchLogs(); if (t === 'team') fetchMembers(); if (t === 'shifts') fetchShifts() }}
+              className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                tab === t
+                  ? 'border-blue-500 text-zinc-100'
+                  : 'border-transparent text-zinc-500 hover:text-zinc-300'
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              <span className="hidden sm:inline">{label}</span>
+              {t === 'shifts' && pendingShifts.length > 0 && (
+                <span className="ml-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 text-[10px] font-bold text-black">
+                  {pendingShifts.length}
+                </span>
+              )}
+            </button>
+          ))}
         </div>
 
-        {/* State card */}
-        <div className="w-full">
-          {step === 'IDLE' && (
-            <div className="state-enter space-y-5">
-              <div className="bg-[var(--card)] border border-[var(--card-border)] rounded-2xl p-8 text-center">
-                <div className="w-16 h-16 mx-auto rounded-2xl bg-white/5 flex items-center justify-center mb-4">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                <h2 className="text-lg font-bold text-white mb-1">No active shifts</h2>
-                <p className="text-sm text-gray-500">Post a shift to get started</p>
-              </div>
-
+        {/* === SHIFTS TAB === */}
+        {tab === 'shifts' && (
+          <div className="space-y-6">
+            {/* Actions */}
+            <div className="flex flex-wrap gap-2">
               <button
-                onClick={() => sendAction('POST_SHIFT')}
-                disabled={acting}
-                className="w-full py-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl font-bold text-base shadow-lg shadow-blue-600/20 active:scale-[0.97] transition-all"
+                onClick={() => setShowPostForm(!showPostForm)}
+                className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500"
               >
-                Post Shift
+                <Plus className="h-4 w-4" /> Post Shift
+              </button>
+              <button
+                onClick={() => handleExport('csv')}
+                className="inline-flex items-center gap-2 rounded-md border border-zinc-800 px-3.5 py-2 text-sm text-zinc-400 transition-colors hover:text-zinc-200 hover:border-zinc-700"
+              >
+                <Download className="h-4 w-4" /> CSV
+              </button>
+              <button
+                onClick={() => handleExport('json')}
+                className="inline-flex items-center gap-2 rounded-md border border-zinc-800 px-3.5 py-2 text-sm text-zinc-400 transition-colors hover:text-zinc-200 hover:border-zinc-700"
+              >
+                <Download className="h-4 w-4" /> JSON
               </button>
             </div>
-          )}
 
-          {step === 'POSTED' && (
-            <div className="state-enter space-y-5">
-              <div className="bg-[var(--card)] border border-amber-500/20 rounded-2xl p-6">
-                <div className="flex items-center gap-3 mb-5">
-                  <div className="relative w-10 h-10 rounded-full bg-amber-500/10 flex items-center justify-center text-amber-400 pulse-ring">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </div>
+            {/* Post form */}
+            {showPostForm && (
+              <Card>
+                <form onSubmit={handlePostShift} className="space-y-4">
                   <div>
-                    <h2 className="text-base font-bold text-white">Awaiting claims</h2>
-                    <p className="text-xs text-gray-500">Staff have been notified</p>
+                    <h3 className="text-base font-semibold text-zinc-100">Post a Shift for Swap</h3>
+                    <p className="text-sm text-zinc-500 mt-0.5">Select who can&apos;t make their shift</p>
                   </div>
-                </div>
 
-                {/* Shift detail */}
-                <div className="bg-black/20 rounded-xl p-4 space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Role</span>
-                    <span className="text-sm text-white font-medium">Bar Staff</span>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <FormField label="Staff Member">
+                      <select
+                        value={formOwnerId}
+                        onChange={(e) => setFormOwnerId(e.target.value)}
+                        required
+                        className="w-full rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-blue-600"
+                      >
+                        <option value="">Select staff member...</option>
+                        {staffMembers.map((m) => (
+                          <option key={m.id} value={m.id}>{m.name} ({m.staffRole})</option>
+                        ))}
+                      </select>
+                    </FormField>
+                    <FormField label="Shift Title">
+                      <input type="text" value={formTitle} onChange={(e) => setFormTitle(e.target.value)} placeholder="e.g. Morning Bar" required className="w-full rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-blue-600" />
+                    </FormField>
+                    <FormField label="Date">
+                      <input type="date" value={formDate} onChange={(e) => setFormDate(e.target.value)} required className="w-full rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-blue-600" />
+                    </FormField>
+                    <div className="grid grid-cols-2 gap-3">
+                      <FormField label="Start">
+                        <input type="time" value={formStartTime} onChange={(e) => setFormStartTime(e.target.value)} required className="w-full rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-blue-600" />
+                      </FormField>
+                      <FormField label="End">
+                        <input type="time" value={formEndTime} onChange={(e) => setFormEndTime(e.target.value)} required className="w-full rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-blue-600" />
+                      </FormField>
+                    </div>
                   </div>
-                  <div className="h-px bg-white/5" />
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Time</span>
-                    <span className="text-sm text-white font-medium">Fri 18:00 – 23:00</span>
+
+                  <FormField label="Reason (optional)">
+                    <input type="text" value={formReason} onChange={(e) => setFormReason(e.target.value)} placeholder="e.g. Doctor's appointment" className="w-full rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-blue-600" />
+                  </FormField>
+
+                  <div className="flex gap-2 pt-1">
+                    <button type="submit" disabled={actionLoading === 'post'} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50">
+                      {actionLoading === 'post' ? 'Posting...' : 'Post Shift'}
+                    </button>
+                    <button type="button" onClick={() => setShowPostForm(false)} className="rounded-md border border-zinc-800 px-4 py-2 text-sm text-zinc-400 hover:text-zinc-200">
+                      Cancel
+                    </button>
                   </div>
-                  <div className="h-px bg-white/5" />
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Rate</span>
-                    <span className="text-sm text-emerald-400 font-bold">£11.00/hr</span>
-                  </div>
+                </form>
+              </Card>
+            )}
+
+            {/* Pending approval */}
+            {pendingShifts.length > 0 && (
+              <section>
+                <SectionLabel>Awaiting Approval</SectionLabel>
+                <div className="space-y-2">
+                  {pendingShifts.map((shift) => (
+                    <Card key={shift.id} className="!border-amber-500/15">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-medium text-zinc-100">{shift.title}</span>
+                            <StatusBadge status={shift.status} />
+                          </div>
+                          <p className="text-sm text-zinc-500">
+                            {formatShiftDate(shift.date)} · {shift.startTime} – {shift.endTime}
+                          </p>
+                          <p className="text-sm text-zinc-500 mt-1">
+                            <span className="text-red-400">{shift.originalOwner.name}</span>
+                            <span className="text-zinc-600 mx-1.5">→</span>
+                            <span className="text-emerald-400">{shift.claimedBy?.name}</span>
+                            {shift.claimedBy?.staffRole && <span className="text-zinc-600"> ({shift.claimedBy.staffRole})</span>}
+                          </p>
+                          {shift.reason && <p className="text-xs text-zinc-600 mt-1">Reason: {shift.reason}</p>}
+                        </div>
+                        <div className="flex gap-2 shrink-0">
+                          <button
+                            onClick={() => handleApprove(shift.id, shift.version)}
+                            disabled={actionLoading === shift.id}
+                            className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
+                          >
+                            <Check className="h-3.5 w-3.5" /> Approve
+                          </button>
+                          <button
+                            onClick={() => handleDecline(shift.id, shift.version)}
+                            disabled={actionLoading === shift.id}
+                            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-3 py-1.5 text-sm font-medium text-zinc-300 transition-colors hover:border-red-800 hover:text-red-400 disabled:opacity-50"
+                          >
+                            <X className="h-3.5 w-3.5" /> Decline
+                          </button>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Available for claiming */}
+            {postedShifts.length > 0 && (
+              <section>
+                <SectionLabel>Available for Claiming</SectionLabel>
+                <div className="space-y-2">
+                  {postedShifts.map((shift) => (
+                    <Card key={shift.id}>
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-medium text-zinc-100">{shift.title}</span>
+                            <StatusBadge status={shift.status} />
+                          </div>
+                          <p className="text-sm text-zinc-500">
+                            {formatShiftDate(shift.date)} · {shift.startTime} – {shift.endTime}
+                          </p>
+                          <p className="text-sm text-zinc-500 mt-1">
+                            {shift.originalOwner.name} {shift.originalOwner.staffRole && `(${shift.originalOwner.staffRole})`}
+                          </p>
+                          {shift.reason && <p className="text-xs text-zinc-600 mt-1">Reason: {shift.reason}</p>}
+                        </div>
+                        <button
+                          onClick={() => handleCancel(shift.id, shift.version)}
+                          disabled={actionLoading === shift.id}
+                          className="inline-flex items-center gap-1.5 rounded-md border border-zinc-800 px-3 py-1.5 text-sm text-zinc-500 hover:text-red-400 hover:border-red-800 transition-colors disabled:opacity-50"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" /> Cancel
+                        </button>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Processed */}
+            {completedShifts.length > 0 && (
+              <section>
+                <SectionLabel>Processed</SectionLabel>
+                <div className="space-y-2">
+                  {completedShifts.map((shift) => (
+                    <Card key={shift.id} className="opacity-50">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <span className="font-medium text-zinc-300">{shift.title}</span>
+                            <StatusBadge status={shift.status} />
+                          </div>
+                          <p className="text-sm text-zinc-600">
+                            {formatShiftDate(shift.date)} · {shift.startTime} – {shift.endTime}
+                          </p>
+                          <p className="text-sm text-zinc-600 mt-0.5">
+                            {shift.originalOwner.name} {shift.claimedBy ? `→ ${shift.claimedBy.name}` : ''}
+                          </p>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {shifts.length === 0 && (
+              <EmptyState
+                icon="📋"
+                title="No shifts yet"
+                description="Post a shift for swap to get started. Staff will be notified immediately."
+              />
+            )}
+          </div>
+        )}
+
+        {/* === TEAM TAB === */}
+        {tab === 'team' && (
+          <div className="space-y-6">
+            <Card>
+              <div className="mb-4">
+                <h3 className="text-base font-semibold text-zinc-100">Invite Team Members</h3>
+                <p className="text-sm text-zinc-500 mt-0.5">Share this code or link with your staff</p>
+              </div>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="flex items-center rounded-md border border-zinc-800 bg-zinc-900 px-4 py-2.5 flex-1">
+                  <span className="font-mono text-lg font-bold tracking-[0.25em] text-zinc-200">{org?.joinCode}</span>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={handleCopyCode} className="inline-flex items-center gap-1.5 rounded-md border border-zinc-800 px-3 py-2 text-sm text-zinc-400 hover:text-zinc-200 transition-colors">
+                    <Copy className="h-4 w-4" /> Code
+                  </button>
+                  <button onClick={handleCopyLink} className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500 transition-colors">
+                    <Share2 className="h-4 w-4" /> Link
+                  </button>
+                  <button
+                    onClick={async () => { await regenerateCode(); showToast('New join code generated') }}
+                    className="inline-flex items-center rounded-md border border-zinc-800 p-2 text-zinc-500 hover:text-zinc-200 transition-colors"
+                    title="Generate new code"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                  </button>
                 </div>
               </div>
+            </Card>
 
-              <button
-                onClick={() => sendAction('RESET')}
-                disabled={acting}
-                className="w-full py-3.5 bg-white/5 hover:bg-white/10 text-gray-400 rounded-xl font-semibold text-sm transition-all active:scale-[0.97]"
-              >
-                Cancel posting
-              </button>
-            </div>
-          )}
-
-          {step === 'CLAIMED' && (
-            <div className="state-enter space-y-5">
-              <div className="bg-[var(--card)] border border-blue-500/20 rounded-2xl p-6">
-                <div className="flex items-center gap-3 mb-5">
-                  <div className="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                    </svg>
-                  </div>
-                  <div>
-                    <h2 className="text-base font-bold text-white">Mike claimed the shift</h2>
-                    <p className="text-xs text-gray-500">Approve or decline below</p>
-                  </div>
-                </div>
-
-                <div className="bg-black/20 rounded-xl p-4 space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Applicant</span>
-                    <span className="text-sm text-white font-medium">Mike</span>
-                  </div>
-                  <div className="h-px bg-white/5" />
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Shift</span>
-                    <span className="text-sm text-white font-medium">Bar Staff · Fri 18:00</span>
-                  </div>
-                </div>
+            <section>
+              <SectionLabel>Team Members ({members.length})</SectionLabel>
+              <div className="space-y-1.5">
+                {members.map((member) => (
+                  <Card key={member.id} className="!py-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-800 text-xs font-semibold text-zinc-300">
+                          {member.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()}
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-zinc-200">{member.name}</p>
+                          <p className="text-xs text-zinc-500">
+                            {member.email}
+                            {member.staffRole && <span className="text-zinc-600"> · {member.staffRole}</span>}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <StatusBadge status={member.role} />
+                        {member.role === 'STAFF' && member.id !== session.member?.id && (
+                          <button
+                            onClick={() => handleRemoveMember(member.id, member.name)}
+                            className="text-zinc-700 hover:text-red-400 transition-colors"
+                            title="Remove member"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </Card>
+                ))}
               </div>
+              {members.length === 0 && (
+                <EmptyState icon="👥" title="No team members" description="Share the join code with your staff to get started." />
+              )}
+            </section>
+          </div>
+        )}
 
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={() => sendAction('RESET')}
-                  disabled={acting}
-                  className="py-3.5 bg-red-500/10 text-red-400 hover:bg-red-500/20 rounded-xl font-semibold text-sm transition-all active:scale-[0.97]"
-                >
-                  Decline
+        {/* === HISTORY TAB === */}
+        {tab === 'history' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <SectionLabel>Activity Log</SectionLabel>
+              <div className="flex gap-2">
+                <button onClick={() => handleExport('csv')} className="inline-flex items-center gap-1 rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
+                  <Download className="h-3 w-3" /> CSV
                 </button>
-                <button
-                  onClick={() => sendAction('APPROVE_SHIFT')}
-                  disabled={acting}
-                  className="py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-sm shadow-lg shadow-emerald-600/20 active:scale-[0.97] transition-all"
-                >
-                  Approve
+                <button onClick={() => handleExport('json')} className="inline-flex items-center gap-1 rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
+                  <Download className="h-3 w-3" /> JSON
                 </button>
               </div>
             </div>
-          )}
 
-          {step === 'APPROVED' && (
-            <div className="state-enter space-y-5">
-              <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-2xl p-8 text-center">
-                <div className="w-16 h-16 mx-auto rounded-2xl bg-emerald-500/10 flex items-center justify-center mb-4">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                <h2 className="text-lg font-bold text-white mb-1">Shift filled</h2>
-                <p className="text-sm text-gray-500">Mike is confirmed for Fri 18:00 – 23:00</p>
+            {logs.length > 0 ? (
+              <div className="space-y-1">
+                {logs.map((log) => (
+                  <Card key={log.id} className="!py-3 !px-4">
+                    <div className="flex items-start gap-3">
+                      <div className={`mt-1 h-1.5 w-1.5 rounded-full shrink-0 ${
+                        log.action === 'APPROVED' ? 'bg-emerald-500' :
+                        log.action === 'DECLINED' ? 'bg-red-500' :
+                        log.action === 'CLAIMED' ? 'bg-amber-500' :
+                        log.action === 'CANCELLED' ? 'bg-zinc-500' :
+                        'bg-blue-500'
+                      }`} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-zinc-300">
+                          <span className="font-medium">{log.actor.name}</span>
+                          <span className="text-zinc-500">
+                            {log.action === 'POSTED' && ' posted a shift for swap'}
+                            {log.action === 'CLAIMED' && ' claimed a shift'}
+                            {log.action === 'APPROVED' && ' approved a swap'}
+                            {log.action === 'DECLINED' && ' declined a claim'}
+                            {log.action === 'CANCELLED' && ' cancelled a shift'}
+                          </span>
+                        </p>
+                        <p className="text-xs text-zinc-600 mt-0.5">
+                          {log.shift.title} · {formatShiftDate(log.shift.date)} · {log.shift.startTime}–{log.shift.endTime}
+                        </p>
+                      </div>
+                      <span className="text-[11px] text-zinc-600 whitespace-nowrap shrink-0">
+                        {new Date(log.createdAt).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                  </Card>
+                ))}
               </div>
-
-              <button
-                onClick={() => sendAction('RESET')}
-                disabled={acting}
-                className="w-full py-3.5 bg-white/5 hover:bg-white/10 text-gray-400 rounded-xl font-semibold text-sm transition-all active:scale-[0.97]"
-              >
-                Start new cycle
-              </button>
-            </div>
-          )}
-        </div>
+            ) : (
+              <EmptyState icon="📜" title="No activity yet" description="Shift swap activity will appear here." />
+            )}
+          </div>
+        )}
       </main>
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </>
+  )
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <h3 className="text-xs font-medium uppercase tracking-wider text-zinc-500 mb-3">{children}</h3>
+  )
+}
+
+function FormField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-zinc-400 mb-1.5">{label}</label>
+      {children}
     </div>
-  );
+  )
 }

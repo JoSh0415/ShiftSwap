@@ -1,174 +1,300 @@
-'use client';
+'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
-export type DemoStep = 'IDLE' | 'POSTED' | 'CLAIMED' | 'APPROVED';
-export type Role = 'manager' | 'staff';
-export type Action = 'SUBSCRIBE' | 'POST_SHIFT' | 'CLAIM_SHIFT' | 'APPROVE_SHIFT' | 'RESET';
 
-export type DemoState = {
-  step: DemoStep;
-  version: number;
-  updatedAt: number;
-  vapidPublicKey?: string;
-  shiftDetails: {
-    role: string;
-    time: string;
-    rate: string;
-    candidate: string;
-  };
-};
-
-// ── VAPID key helper ───────────────────────────────────────────────────────────
-function urlBase64ToUint8Array(base64String: string) {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const rawData = atob(base64);
-  const out = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) out[i] = rawData.charCodeAt(i);
-  return out;
+interface SessionData {
+  authenticated: boolean
+  member?: {
+    id: string
+    name: string
+    email: string
+    role: 'MANAGER' | 'STAFF'
+  }
+  organisationId?: string
 }
 
-// ── Shared hook ────────────────────────────────────────────────────────────────
-export function useShiftSwap(role: Role) {
-  const [state, setState] = useState<DemoState | null>(null);
-  const [subscribed, setSubscribed] = useState(false);
-  const [notifPermission, setNotifPermission] = useState<NotificationPermission>('default');
-  const [acting, setActing] = useState(false);
-  const versionRef = useRef(-1);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+interface OrgData {
+  id: string
+  name: string
+  joinCode?: string
+  memberCount: number
+  shiftCount: number
+  createdAt?: string
+}
 
-  // Check permission on mount
-  useEffect(() => {
-    if (typeof window !== 'undefined' && 'Notification' in window) {
-      setNotifPermission(Notification.permission);
-    }
-  }, []);
+interface MemberData {
+  id: string
+  name: string
+  email: string
+  role: 'MANAGER' | 'STAFF'
+  staffRole?: string
+  createdAt: string
+}
 
-  // ── Poll with version gating (prevents flicker) ──────────────────────────
-  const poll = useCallback(async () => {
+interface ShiftData {
+  id: string
+  title: string
+  date: string
+  startTime: string
+  endTime: string
+  status: 'POSTED' | 'CLAIMED' | 'APPROVED' | 'DECLINED' | 'CANCELLED'
+  reason?: string
+  version: number
+  originalOwner: { id: string; name: string; staffRole?: string }
+  claimedBy?: { id: string; name: string; staffRole?: string }
+  postedBy: { id: string; name: string }
+  claimedAt?: string
+  approvedAt?: string
+  createdAt: string
+}
+
+interface LogEntry {
+  id: string
+  action: string
+  details?: string
+  createdAt: string
+  actor: { name: string; role: string }
+  shift: {
+    title: string
+    date: string
+    startTime: string
+    endTime: string
+    originalOwner: { name: string }
+  }
+}
+
+interface ApiResponse<T> {
+  ok: boolean
+  data?: T
+  error?: string
+}
+
+// ── API helper ─────────────────────────────────────────────────────────────────
+
+async function api<T>(url: string, options?: RequestInit): Promise<ApiResponse<T>> {
+  const res = await fetch(url, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+  })
+  return res.json()
+}
+
+// ── Hooks ──────────────────────────────────────────────────────────────────────
+
+export function useSession() {
+  const [session, setSession] = useState<SessionData | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  const checkSession = useCallback(async () => {
     try {
-      const res = await fetch('/api/demo', { cache: 'no-store' });
-      if (!res.ok) return;
-      const data: DemoState = await res.json();
-
-      // Only update React state when the server version actually changes
-      if (data.version !== versionRef.current) {
-        versionRef.current = data.version;
-        setState(data);
+      const res = await api<SessionData>('/api/auth/session')
+      if (res.ok && res.data) {
+        setSession(res.data)
+      } else {
+        setSession({ authenticated: false })
       }
     } catch {
-      // Network blip — silently retry on next tick
+      setSession({ authenticated: false })
+    } finally {
+      setLoading(false)
     }
-  }, []);
+  }, [])
 
-  useEffect(() => {
-    // Immediate first poll
-    poll();
-    pollRef.current = setInterval(poll, 2000);
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [poll]);
+  useEffect(() => { checkSession() }, [checkSession])
 
-  // ── Auto-resubscribe on mount if permission already granted ───────────────
-  useEffect(() => {
-    if (notifPermission !== 'granted') return;
-    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+  const logout = useCallback(async () => {
+    await api('/api/auth/session', { method: 'POST' })
+    setSession({ authenticated: false })
+    window.location.href = '/'
+  }, [])
 
-    (async () => {
-      try {
-        const reg = await navigator.serviceWorker.ready;
-        const existing = await reg.pushManager.getSubscription();
-        if (existing) {
-          // Re-register the subscription with the server (it might have restarted)
-          await fetch('/api/demo', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ action: 'SUBSCRIBE', role, subscription: existing }),
-          });
-          setSubscribed(true);
-        }
-      } catch (e) {
-        console.warn('[ShiftSwap] Auto-resubscribe failed:', e);
+  return { session, loading, checkSession, logout }
+}
+
+export function useOrg() {
+  const [org, setOrg] = useState<OrgData | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  const fetchOrg = useCallback(async () => {
+    const res = await api<{ org: OrgData }>('/api/org')
+    if (res.ok && res.data) setOrg(res.data.org)
+    setLoading(false)
+  }, [])
+
+  const regenerateCode = useCallback(async () => {
+    const res = await api<{ joinCode: string }>('/api/org', { method: 'POST' })
+    if (res.ok && res.data) {
+      setOrg((prev) => prev ? { ...prev, joinCode: res.data!.joinCode } : null)
+    }
+    return res
+  }, [])
+
+  useEffect(() => { fetchOrg() }, [fetchOrg])
+
+  return { org, loading, fetchOrg, regenerateCode }
+}
+
+export function useMembers() {
+  const [members, setMembers] = useState<MemberData[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const fetchMembers = useCallback(async () => {
+    const res = await api<{ members: MemberData[] }>('/api/members')
+    if (res.ok && res.data) setMembers(res.data.members)
+    setLoading(false)
+  }, [])
+
+  const removeMember = useCallback(async (memberId: string) => {
+    const res = await api('/api/members', {
+      method: 'DELETE',
+      body: JSON.stringify({ memberId }),
+    })
+    if (res.ok) {
+      setMembers((prev) => prev.filter((m) => m.id !== memberId))
+    }
+    return res
+  }, [])
+
+  useEffect(() => { fetchMembers() }, [fetchMembers])
+
+  return { members, loading, fetchMembers, removeMember }
+}
+
+export function useShifts(pollInterval = 5000) {
+  const [shifts, setShifts] = useState<ShiftData[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const fetchShifts = useCallback(async () => {
+    try {
+      const res = await api<{ shifts: ShiftData[] }>('/api/shifts')
+      if (res.ok && res.data) {
+        setShifts(res.data.shifts)
+        setError(null)
       }
-    })();
-  }, [notifPermission, role]);
+    } catch {
+      setError('Failed to load shifts')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
-  // ── Subscribe to push notifications ───────────────────────────────────────
+  useEffect(() => {
+    fetchShifts()
+    intervalRef.current = setInterval(fetchShifts, pollInterval)
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+    }
+  }, [fetchShifts, pollInterval])
+
+  const postShift = useCallback(async (data: {
+    title: string
+    date: string
+    startTime: string
+    endTime: string
+    reason?: string
+    originalOwnerId: string
+  }) => {
+    const res = await api<{ shift: ShiftData }>('/api/shifts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    if (res.ok) await fetchShifts()
+    return res
+  }, [fetchShifts])
+
+  const claimShift = useCallback(async (shiftId: string, version: number) => {
+    const res = await api<{ shift: ShiftData }>('/api/shifts', {
+      method: 'PATCH',
+      body: JSON.stringify({ shiftId, action: 'CLAIM', version }),
+    })
+    if (res.ok) await fetchShifts()
+    return res
+  }, [fetchShifts])
+
+  const approveShift = useCallback(async (shiftId: string, version: number) => {
+    const res = await api<{ shift: ShiftData }>('/api/shifts', {
+      method: 'PATCH',
+      body: JSON.stringify({ shiftId, action: 'APPROVE', version }),
+    })
+    if (res.ok) await fetchShifts()
+    return res
+  }, [fetchShifts])
+
+  const declineShift = useCallback(async (shiftId: string, version: number) => {
+    const res = await api<{ shift: ShiftData }>('/api/shifts', {
+      method: 'PATCH',
+      body: JSON.stringify({ shiftId, action: 'DECLINE', version }),
+    })
+    if (res.ok) await fetchShifts()
+    return res
+  }, [fetchShifts])
+
+  const cancelShift = useCallback(async (shiftId: string, version: number) => {
+    const res = await api<{ shift: ShiftData }>('/api/shifts', {
+      method: 'PATCH',
+      body: JSON.stringify({ shiftId, action: 'CANCEL', version }),
+    })
+    if (res.ok) await fetchShifts()
+    return res
+  }, [fetchShifts])
+
+  return { shifts, loading, error, fetchShifts, postShift, claimShift, approveShift, declineShift, cancelShift }
+}
+
+export function useChangelog() {
+  const [logs, setLogs] = useState<LogEntry[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const fetchLogs = useCallback(async () => {
+    const res = await api<{ logs: LogEntry[] }>('/api/changelog')
+    if (res.ok && res.data) setLogs(res.data.logs)
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { fetchLogs() }, [fetchLogs])
+
+  return { logs, loading, fetchLogs }
+}
+
+export function usePushNotifications(memberId?: string) {
+  const [supported, setSupported] = useState(false)
+  const [subscribed, setSubscribed] = useState(false)
+
+  useEffect(() => {
+    setSupported('serviceWorker' in navigator && 'PushManager' in window)
+  }, [])
+
   const subscribe = useCallback(async () => {
-    if (typeof window === 'undefined' || !('Notification' in window)) return;
-
-    const perm = await Notification.requestPermission();
-    setNotifPermission(perm);
-    if (perm !== 'granted') return;
-
-    if (!('serviceWorker' in navigator)) return;
+    if (!supported || !memberId) return
 
     try {
-      const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
-      await navigator.serviceWorker.ready;
+      const registration = await navigator.serviceWorker.register('/sw.js')
+      await navigator.serviceWorker.ready
 
-      let sub = await reg.pushManager.getSubscription();
+      const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
+      if (!vapidKey) return
 
-      if (!sub) {
-        // Fetch the VAPID public key from the server
-        const apiRes = await fetch('/api/demo', { cache: 'no-store' });
-        const { vapidPublicKey } = await apiRes.json();
-        if (!vapidPublicKey) {
-          console.error('[ShiftSwap] No VAPID public key from server');
-          return;
-        }
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: vapidKey,
+      })
 
-        sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
-        });
-      }
-
-      const resp = await fetch('/api/demo', {
+      const res = await api('/api/push', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ action: 'SUBSCRIBE', role, subscription: sub }),
-      });
+        body: JSON.stringify({ subscription: subscription.toJSON() }),
+      })
 
-      if (!resp.ok) {
-        console.error('[ShiftSwap] Subscription registration failed');
-        return;
-      }
-
-      setSubscribed(true);
-    } catch (e) {
-      console.error('[ShiftSwap] Subscribe error:', e);
+      if (res.ok) setSubscribed(true)
+    } catch (err) {
+      console.error('Push subscription failed:', err)
     }
-  }, [role]);
+  }, [supported, memberId])
 
-  // ── Dispatch an action ────────────────────────────────────────────────────
-  const sendAction = useCallback(
-    async (action: Action) => {
-      setActing(true);
-      try {
-        const res = await fetch('/api/demo', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ action }),
-        });
-        if (res.ok) {
-          const data: DemoState = await res.json();
-          versionRef.current = data.version;
-          setState(data);
-        }
-      } catch (e) {
-        console.error('[ShiftSwap] Action failed:', e);
-      } finally {
-        setActing(false);
-      }
-    },
-    []
-  );
-
-  const needsSubscription = !subscribed && notifPermission !== 'denied';
-
-  return { state, subscribed, notifPermission, acting, needsSubscription, subscribe, sendAction, poll };
+  return { supported, subscribed, subscribe }
 }
+
+export type { SessionData, OrgData, MemberData, ShiftData, LogEntry }

@@ -1,0 +1,115 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organisation {
+  id        String   @id @default(uuid())
+  name      String
+  joinCode  String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members Member[]
+  shifts  Shift[]
+
+  @@map("organisations")
+}
+
+model Member {
+  id             String   @id @default(uuid())
+  name           String
+  email          String
+  passwordHash   String
+  role           Role
+  staffRole      String?
+  organisationId String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organisation        Organisation       @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  postedShifts        Shift[]            @relation("PostedBy")
+  originalOwnerShifts Shift[]            @relation("OriginalOwner")
+  claimedShifts       Shift[]            @relation("ClaimedBy")
+  pushSubscriptions   PushSubscription[]
+  shiftSwapLogs       ShiftSwapLog[]     @relation("LogActor")
+
+  @@unique([email, organisationId])
+  @@map("members")
+}
+
+enum Role {
+  MANAGER
+  STAFF
+}
+
+model Shift {
+  id               String      @id @default(uuid())
+  title            String
+  date             DateTime
+  startTime        String
+  endTime          String
+  status           ShiftStatus @default(POSTED)
+  reason           String?
+  organisationId   String
+  postedById       String
+  originalOwnerId  String
+  claimedById      String?
+  claimedAt        DateTime?
+  approvedAt       DateTime?
+  declinedAt       DateTime?
+  version          Int         @default(0)
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  organisation  Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  postedBy      Member       @relation("PostedBy", fields: [postedById], references: [id])
+  originalOwner Member       @relation("OriginalOwner", fields: [originalOwnerId], references: [id])
+  claimedBy     Member?      @relation("ClaimedBy", fields: [claimedById], references: [id])
+  swapLogs      ShiftSwapLog[]
+
+  @@index([organisationId, status])
+  @@index([organisationId, date])
+  @@map("shifts")
+}
+
+enum ShiftStatus {
+  POSTED
+  CLAIMED
+  APPROVED
+  DECLINED
+  CANCELLED
+}
+
+model ShiftSwapLog {
+  id        String   @id @default(uuid())
+  shiftId   String
+  actorId   String
+  action    String
+  details   String?
+  createdAt DateTime @default(now())
+
+  shift Shift  @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  actor Member @relation("LogActor", fields: [actorId], references: [id])
+
+  @@index([shiftId])
+  @@map("shift_swap_logs")
+}
+
+model PushSubscription {
+  id        String   @id @default(uuid())
+  memberId  String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([memberId])
+  @@map("push_subscriptions")
+}
