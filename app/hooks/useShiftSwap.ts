@@ -210,8 +210,17 @@ export function useShifts(pollInterval = 15000) {
     fetchShifts()
     startPolling()
 
+    // Clear app icon badge on initial load
+    if ('clearAppBadge' in navigator) {
+      (navigator as any).clearAppBadge().catch(() => {})
+    }
+
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
+        // Clear app icon badge when user returns to app
+        if ('clearAppBadge' in navigator) {
+          (navigator as any).clearAppBadge().catch(() => {})
+        }
         // If tab was hidden for more than 5s, refetch immediately
         if (Date.now() - lastFetchRef.current > 5000) {
           fetchShifts()

@@ -1,7 +1,7 @@
-// ShiftSwap Service Worker v2
-// Handles push notifications, caching, and notification clicks
+// ShiftSwap Service Worker v3
+// Handles push notifications, caching, app badge, and notification clicks
 
-const CACHE_NAME = 'shiftswap-v2';
+const CACHE_NAME = 'shiftswap-v3';
 const OFFLINE_URL = '/';
 
 // Install — cache shell for offline PWA support
@@ -24,7 +24,7 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Push — display notification from server payload
+// Push — display notification and set app badge
 self.addEventListener('push', (event) => {
   if (!event.data) return;
 
@@ -45,25 +45,47 @@ self.addEventListener('push', (event) => {
     data: { url: data.url || '/' },
   };
 
-  event.waitUntil(self.registration.showNotification(data.title || 'ShiftSwap', options));
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'ShiftSwap', options).then(() => {
+      // Set app icon badge — count all visible notifications
+      if (self.registration.getNotifications) {
+        return self.registration.getNotifications().then((notifications) => {
+          if (navigator.setAppBadge) {
+            navigator.setAppBadge(notifications.length);
+          }
+        });
+      }
+    })
+  );
 });
 
-// Notification click — focus or open the relevant page
+// Notification click — focus or open the relevant page and update badge
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
   const targetUrl = event.notification.data?.url || '/';
 
   event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
-      // Try to focus an existing tab
-      for (const client of windowClients) {
-        if (client.url.includes(targetUrl) && 'focus' in client) {
-          return client.focus();
+    Promise.all([
+      // Update badge count after closing this notification
+      self.registration.getNotifications().then((notifications) => {
+        if (navigator.setAppBadge) {
+          if (notifications.length > 0) {
+            navigator.setAppBadge(notifications.length);
+          } else {
+            navigator.clearAppBadge();
+          }
         }
-      }
-      // Otherwise open a new window
-      return clients.openWindow(targetUrl);
-    })
+      }),
+      // Focus existing tab or open new one
+      clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+        for (const client of windowClients) {
+          if (client.url.includes(targetUrl) && 'focus' in client) {
+            return client.focus();
+          }
+        }
+        return clients.openWindow(targetUrl);
+      }),
+    ])
   );
 });
