@@ -1,184 +1,184 @@
 'use client';
-import { useState, useEffect, useRef } from 'react';
 
-// Helper for VAPID key conversion
-function urlBase64ToUint8Array(base64String: string) {
-  const padding = '='.repeat((4 - base64String.length % 4) % 4);
-  const base64 = (base64String + padding)
-    .replace(/-/g, '+')
-    .replace(/_/g, '/');
-
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
-}
+import Link from 'next/link';
+import { useShiftSwap } from '../hooks/useShiftSwap';
 
 export default function StaffPage() {
-  const [state, setState] = useState('IDLE');
-  const [permission, setPermission] = useState(() => {
-    if (typeof window !== 'undefined' && 'Notification' in window) {
-      return Notification.permission;
-    }
-    return 'default';
-  });
-  const [subscribed, setSubscribed] = useState(false);
-  const previousState = useRef('IDLE');
-
-  const enableAlerts = async () => {
-    if (typeof window === 'undefined' || !('Notification' in window)) return;
-
-    const res = await Notification.requestPermission();
-    setPermission(res);
-    if (res !== 'granted') return;
-
-    if (!('serviceWorker' in navigator)) return;
-
-    try {
-      const register = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
-
-      // Reuse existing subscription to avoid multi-tab duplication.
-      let subscription = await register.pushManager.getSubscription();
-
-      if (!subscription) {
-        const apiRes = await fetch('/api/demo', { cache: 'no-store' });
-        const { vapidPublicKey } = await apiRes.json();
-
-        subscription = await register.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
-        });
-      }
-
-      const subRes = await fetch('/api/demo', {
-        method: 'POST',
-        cache: 'no-store',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'SUBSCRIBE',
-          role: 'staff',
-          subscription,
-        }),
-      });
-
-      if (!subRes.ok) {
-        console.error('Failed to register subscription:', await subRes.text());
-        return;
-      }
-
-      setSubscribed(true);
-      new Notification('Alerts Enabled!', { body: 'You will now receive shift notifications.' });
-      if (navigator.vibrate) navigator.vibrate(200);
-    } catch (e) {
-      console.error('Failed to subscribe:', e);
-    }
-  };
-
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      const res = await fetch('/api/demo', { cache: 'no-store' });
-      const data = await res.json();
-      
-      // Removed local notifications to avoid duplicates with Push
-      // But we still poll for UI state updates
-
-      previousState.current = data.step;
-      setState(data.step);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const sendAction = async (action: string) => {
-    const res = await fetch('/api/demo', {
-      method: 'POST',
-      cache: 'no-store',
-      headers: {
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ action }),
-    });
-
-    if (!res.ok) {
-      // Avoid UI flicker / oscillation in multi-tab scenarios.
-      console.error('Action rejected:', await res.text());
-    }
-  };
+  const { state, acting, needsSubscription, subscribe, sendAction } = useShiftSwap('staff');
+  const step = state?.step ?? 'IDLE';
 
   return (
-    <div className="min-h-screen bg-gray-900 p-6 flex flex-col items-center justify-center font-sans text-white">
-      <div className="w-full max-w-md">
-        
-        <header className="flex justify-between items-center mb-8">
-           <h1 className="text-gray-400 font-medium">ServiceScope Staff</h1>
-           <div className={`h-2 w-2 rounded-full ${state === 'POSTED' ? 'bg-red-500 animate-ping' : 'bg-green-500'}`}></div>
-        </header>
+    <div className="min-h-dvh bg-[var(--background)] flex flex-col font-sans text-white">
+      {/* ── Header ──────────────────────────────────────────────────────── */}
+      <header className="sticky top-0 z-40 backdrop-blur-xl bg-[var(--background)]/80 border-b border-[var(--card-border)]">
+        <div className="max-w-lg mx-auto flex items-center justify-between px-5 py-4">
+          <Link href="/" className="flex items-center gap-3 active:opacity-70 transition-opacity">
+            <div className="w-9 h-9 rounded-xl bg-emerald-600 flex items-center justify-center shadow-md shadow-emerald-600/20">
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              </svg>
+            </div>
+            <div>
+              <h1 className="text-base font-bold leading-tight">Staff</h1>
+              <p className="text-[11px] text-gray-500 font-medium">ShiftSwap</p>
+            </div>
+          </Link>
 
-        {/* PERMISSION / SUBSCRIBE BUTTON */}
-        {(permission === 'default' || (permission === 'granted' && !subscribed)) && (
-          <button 
-            onClick={enableAlerts}
-            className="w-full mb-8 py-4 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold shadow-lg animate-pulse transition-all"
+          <div className="flex items-center gap-3">
+            {step === 'POSTED' && (
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+              </span>
+            )}
+            <div className={`w-2 h-2 rounded-full ${state ? 'bg-emerald-500' : 'bg-gray-600'}`} />
+          </div>
+        </div>
+      </header>
+
+      {/* ── Body ────────────────────────────────────────────────────────── */}
+      <main className="flex-1 flex flex-col items-center px-5 py-6 max-w-lg mx-auto w-full">
+        {/* Notification banner */}
+        {needsSubscription && (
+          <button
+            onClick={subscribe}
+            className="w-full mb-5 flex items-center gap-3 p-4 bg-emerald-600/10 border border-emerald-500/20 rounded-xl text-left active:scale-[0.98] transition-transform"
           >
-            🔔 Enable Notifications
+            <div className="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center flex-shrink-0">
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+              </svg>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-emerald-400">Enable notifications</p>
+              <p className="text-xs text-gray-500 mt-0.5">Get alerted when new shifts are posted</p>
+            </div>
           </button>
         )}
 
-        {state === 'IDLE' && (
-          <div className="flex flex-col items-center justify-center py-12 text-gray-600">
-            <div className="text-6xl mb-4 grayscale opacity-50">😴</div>
-            <p className="text-lg">No shifts available right now.</p>
-            <p className="text-sm">We&apos;ll notify you when work comes in.</p>
-          </div>
-        )}
-
-        {state === 'POSTED' && (
-          <div className="bg-white text-gray-900 rounded-2xl p-6 shadow-2xl border-4 border-yellow-400 animate-in slide-in-from-bottom duration-500">
-            <div className="flex justify-between items-start mb-4">
-              <span className="bg-red-100 text-red-600 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide flex items-center gap-1">
-                <span>🔥</span> Urgent
-              </span>
-              <span className="font-bold text-green-600 bg-green-50 px-2 py-1 rounded-lg">£11.00 / hr</span>
+        {/* ── IDLE ────────────────────────────────────────────────────── */}
+        {step === 'IDLE' && (
+          <div className="state-enter flex-1 flex flex-col items-center justify-center text-center py-16 w-full">
+            <div className="w-20 h-20 rounded-2xl bg-white/5 flex items-center justify-center mb-5">
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-10 h-10 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+              </svg>
             </div>
-            
-            <h2 className="text-3xl font-bold mb-1">Bar Staff</h2>
-            <p className="text-gray-500 mb-6 flex items-center gap-2">
-               <span>🕒</span> Fri 18:00 - 23:00
+            <h2 className="text-xl font-bold text-gray-300 mb-2">No shifts right now</h2>
+            <p className="text-sm text-gray-600 max-w-[240px]">
+              We&apos;ll send you a notification the moment something comes in.
             </p>
-            
-            <button 
-              onClick={() => sendAction('CLAIM_SHIFT')}
-              className="w-full py-4 bg-black text-white rounded-xl font-bold text-xl hover:scale-[1.02] active:scale-95 transition-all shadow-xl"
-            >
-              CLAIM SHIFT ⚡️
-            </button>
           </div>
         )}
 
-        {state === 'CLAIMED' && (
-          <div className="text-center bg-gray-800 rounded-2xl p-8 border border-gray-700">
-            <div className="h-16 w-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-6"></div>
-            <h2 className="text-xl font-bold text-white">Waiting for Manager...</h2>
-            <p className="text-gray-400 mt-2">You have claimed this shift.</p>
-          </div>
-        )}
+        {/* ── POSTED — Shift available ────────────────────────────────── */}
+        {step === 'POSTED' && (
+          <div className="state-enter w-full space-y-5">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-500/10 text-red-400 text-xs font-bold uppercase tracking-wider">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                New shift
+              </span>
+            </div>
 
-        {state === 'APPROVED' && (
-          <div className="bg-gradient-to-br from-green-500 to-emerald-600 text-white rounded-2xl p-8 text-center shadow-lg animate-in zoom-in duration-300">
-            <div className="text-6xl mb-4">🎉</div>
-            <h2 className="text-3xl font-bold mb-2">You got it!</h2>
-            <p className="text-green-100 mb-6">Shift added to your calendar.</p>
-            <div className="bg-white/20 rounded-xl p-4 backdrop-blur-sm">
-                <p className="font-mono text-sm">Friday • 18:00 • Bar Staff</p>
+            <div className="bg-[var(--card)] border border-[var(--card-border)] rounded-2xl overflow-hidden">
+              {/* Shift header */}
+              <div className="px-6 pt-6 pb-4">
+                <div className="flex items-start justify-between mb-4">
+                  <div>
+                    <h2 className="text-xl font-bold text-white">Bar Staff</h2>
+                    <p className="text-sm text-gray-500 mt-0.5">Friday evening shift</p>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-lg font-bold text-emerald-400">£11</span>
+                    <span className="text-xs text-gray-500">/hr</span>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 text-sm text-gray-300">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    Friday
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 text-sm text-gray-300">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    18:00 – 23:00
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 text-sm text-gray-300">
+                    5 hours
+                  </span>
+                </div>
+              </div>
+
+              {/* Earnings estimate */}
+              <div className="mx-6 mb-4 p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/10">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Est. earnings</span>
+                  <span className="text-base font-bold text-emerald-400">£55.00</span>
+                </div>
+              </div>
+
+              {/* Claim button */}
+              <div className="px-6 pb-6">
+                <button
+                  onClick={() => sendAction('CLAIM_SHIFT')}
+                  disabled={acting}
+                  className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl font-bold text-base shadow-lg shadow-emerald-600/20 active:scale-[0.97] transition-all"
+                >
+                  Claim this shift
+                </button>
+              </div>
             </div>
           </div>
         )}
 
-      </div>
+        {/* ── CLAIMED — Waiting ───────────────────────────────────────── */}
+        {step === 'CLAIMED' && (
+          <div className="state-enter flex-1 flex flex-col items-center justify-center text-center py-16 w-full">
+            <div className="w-16 h-16 rounded-full border-[3px] border-blue-500 border-t-transparent spinner mb-6" />
+            <h2 className="text-lg font-bold text-white mb-2">Waiting for approval</h2>
+            <p className="text-sm text-gray-500 max-w-[240px]">
+              Your manager has been notified. Sit tight — we&apos;ll let you know the moment they respond.
+            </p>
+          </div>
+        )}
+
+        {/* ── APPROVED — Confirmed ────────────────────────────────────── */}
+        {step === 'APPROVED' && (
+          <div className="state-enter w-full space-y-5">
+            <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-2xl p-8 text-center">
+              <div className="w-16 h-16 mx-auto rounded-2xl bg-emerald-500/10 flex items-center justify-center mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <h2 className="text-xl font-bold text-white mb-1">You&apos;re confirmed!</h2>
+              <p className="text-sm text-gray-500 mb-6">The shift has been added to your schedule</p>
+
+              <div className="bg-black/20 rounded-xl p-4 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Role</span>
+                  <span className="text-sm text-white font-medium">Bar Staff</span>
+                </div>
+                <div className="h-px bg-white/5" />
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold">When</span>
+                  <span className="text-sm text-white font-medium">Fri 18:00 – 23:00</span>
+                </div>
+                <div className="h-px bg-white/5" />
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Pay</span>
+                  <span className="text-sm text-emerald-400 font-bold">£55.00</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
     </div>
   );
 }

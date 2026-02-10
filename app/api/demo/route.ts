@@ -81,7 +81,7 @@ function jsonNoStore(payload: unknown, init?: { status?: number }) {
   });
 }
 
-async function notifyRole(role: Role, payload: { title: string; body: string; url: string }) {
+async function notifyRole(role: Role, payload: { title: string; body: string; url: string; tag?: string }) {
   const store = getStore();
   const targets = store.subscriptions[role];
 
@@ -164,25 +164,28 @@ export async function POST(request: Request) {
   // Role-targeted notifications
   if (action === 'POST_SHIFT') {
     await notifyRole('staff', {
-      title: '🚨 New Shift Available!',
-      body: 'Bar Staff • Fri 18:00 • £11/hr',
+      title: 'New Shift Available',
+      body: 'Bar Staff · Fri 18:00 – 23:00 · £11/hr',
       url: '/staff',
+      tag: 'shift-posted',
     });
   }
 
   if (action === 'CLAIM_SHIFT') {
     await notifyRole('manager', {
-      title: 'Shift Claimed! ⚡️',
-      body: 'A staff member claimed the shift.',
+      title: 'Shift Claimed',
+      body: 'Mike has claimed Bar Staff · Fri 18:00',
       url: '/manager',
+      tag: 'shift-claimed',
     });
   }
 
   if (action === 'APPROVE_SHIFT') {
     await notifyRole('staff', {
-      title: '🎉 You got the shift!',
-      body: 'Manager approved your request.',
+      title: 'Shift Approved',
+      body: 'You\'re confirmed for Bar Staff · Fri 18:00',
       url: '/staff',
+      tag: 'shift-approved',
     });
   }
 
