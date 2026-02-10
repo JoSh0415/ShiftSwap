@@ -14,10 +14,39 @@ model Organisation {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  members Member[]
-  shifts  Shift[]
+  members  Member[]
+  shifts   Shift[]
+  orgRoles OrgRole[]
 
   @@map("organisations")
+}
+
+model OrgRole {
+  id             String   @id @default(uuid())
+  name           String
+  organisationId String
+  createdAt      DateTime @default(now())
+
+  organisation    Organisation     @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  memberRoles     MemberOrgRole[]
+  requiredByShifts Shift[]         @relation("RequiredRole")
+
+  @@unique([name, organisationId])
+  @@index([organisationId])
+  @@map("org_roles")
+}
+
+model MemberOrgRole {
+  id        String   @id @default(uuid())
+  memberId  String
+  orgRoleId String
+  createdAt DateTime @default(now())
+
+  member  Member  @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  orgRole OrgRole @relation(fields: [orgRoleId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, orgRoleId])
+  @@map("member_org_roles")
 }
 
 model Member {
@@ -37,6 +66,7 @@ model Member {
   claimedShifts       Shift[]            @relation("ClaimedBy")
   pushSubscriptions   PushSubscription[]
   shiftSwapLogs       ShiftSwapLog[]     @relation("LogActor")
+  memberOrgRoles      MemberOrgRole[]
 
   @@unique([email, organisationId])
   @@map("members")
@@ -55,6 +85,7 @@ model Shift {
   endTime          String
   status           ShiftStatus @default(POSTED)
   reason           String?
+  requiredRoleId   String?
   organisationId   String
   postedById       String
   originalOwnerId  String
@@ -70,6 +101,7 @@ model Shift {
   postedBy      Member       @relation("PostedBy", fields: [postedById], references: [id])
   originalOwner Member       @relation("OriginalOwner", fields: [originalOwnerId], references: [id])
   claimedBy     Member?      @relation("ClaimedBy", fields: [claimedById], references: [id])
+  requiredRole  OrgRole?     @relation("RequiredRole", fields: [requiredRoleId], references: [id])
   swapLogs      ShiftSwapLog[]
 
   @@index([organisationId, status])

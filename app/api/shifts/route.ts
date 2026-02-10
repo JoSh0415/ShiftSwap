@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { prisma } from '@/lib/db'
 import { getSession } from '@/lib/auth'
 import { success, error, unauthorized, forbidden, formatDate, formatTime } from '@/lib/utils'
-import { sendNotificationToRole, sendNotificationToMember } from '@/lib/notifications'
+import { sendNotificationToRole, sendNotificationToMember, sendNotificationToMembersByOrgRole } from '@/lib/notifications'
 
 // GET /api/shifts — Get shifts for current org
 export async function GET(req: NextRequest) {
@@ -32,13 +32,14 @@ export async function GET(req: NextRequest) {
       delete where.status
     }
 
-    const [shifts, total] = await Promise.all([
+    const [rawShifts, total] = await Promise.all([
       prisma.shift.findMany({
         where,
         include: {
-          originalOwner: { select: { id: true, name: true, staffRole: true } },
-          claimedBy: { select: { id: true, name: true, staffRole: true } },
+          originalOwner: { select: { id: true, name: true, staffRole: true, memberOrgRoles: { select: { orgRole: { select: { id: true, name: true } } } } } },
+          claimedBy: { select: { id: true, name: true, staffRole: true, memberOrgRoles: { select: { orgRole: { select: { id: true, name: true } } } } } },
           postedBy: { select: { id: true, name: true } },
+          requiredRole: { select: { id: true, name: true } },
         },
         orderBy: { date: 'asc' },
         skip,
@@ -46,6 +47,23 @@ export async function GET(req: NextRequest) {
       }),
       prisma.shift.count({ where }),
     ])
+
+    // Flatten memberOrgRoles into orgRoles array
+    const shifts = rawShifts.map((s) => ({
+      ...s,
+      originalOwner: {
+        id: s.originalOwner.id,
+        name: s.originalOwner.name,
+        staffRole: s.originalOwner.staffRole,
+        orgRoles: s.originalOwner.memberOrgRoles.map((mr) => mr.orgRole),
+      },
+      claimedBy: s.claimedBy ? {
+        id: s.claimedBy.id,
+        name: s.claimedBy.name,
+        staffRole: s.claimedBy.staffRole,
+        orgRoles: s.claimedBy.memberOrgRoles.map((mr) => mr.orgRole),
+      } : null,
+    }))
 
     return success({ shifts, total, page, limit })
   } catch (e: unknown) {
@@ -61,7 +79,7 @@ export async function POST(req: NextRequest) {
     if (!session) return unauthorized()
 
     const body = await req.json()
-    const { title, date, startTime, endTime, reason, originalOwnerId } = body
+    const { title, date, startTime, endTime, reason, originalOwnerId, requiredRoleId } = body
 
     if (!title || !date || !startTime || !endTime || !originalOwnerId) {
       return error('All fields are required')
@@ -85,6 +103,7 @@ export async function POST(req: NextRequest) {
         startTime,
         endTime,
         reason,
+        requiredRoleId: requiredRoleId || null,
         organisationId: session.organisationId,
         postedById: session.memberId,
         originalOwnerId,
@@ -93,6 +112,7 @@ export async function POST(req: NextRequest) {
       include: {
         originalOwner: { select: { id: true, name: true, staffRole: true } },
         postedBy: { select: { id: true, name: true } },
+        requiredRole: { select: { id: true, name: true } },
       },
     })
 
@@ -106,14 +126,25 @@ export async function POST(req: NextRequest) {
       },
     })
 
-    // Notify all staff (except the original owner) that a shift is available
+    // Notify staff — if a role is specified, only notify members with that role
     const shiftDate = formatDate(new Date(date))
     const shiftTime = formatTime(startTime, endTime)
-    await sendNotificationToRole(session.organisationId, 'STAFF', {
+    const notifPayload = {
       title: '🔔 Shift Available!',
       body: `${owner.name}'s ${title} on ${shiftDate} (${shiftTime}) is up for grabs!`,
       tag: `shift-${shift.id}`,
-    }, originalOwnerId)
+    }
+
+    if (requiredRoleId) {
+      await sendNotificationToMembersByOrgRole(
+        session.organisationId,
+        requiredRoleId,
+        notifPayload,
+        originalOwnerId
+      )
+    } else {
+      await sendNotificationToRole(session.organisationId, 'STAFF', notifPayload, originalOwnerId)
+    }
 
     return success({ shift }, 201)
   } catch (e: unknown) {

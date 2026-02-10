@@ -30,6 +30,7 @@ interface MemberData {
   email: string
   role: 'MANAGER' | 'STAFF'
   staffRole?: string
+  orgRoles?: { id: string; name: string }[]
   createdAt: string
 }
 
@@ -42,12 +43,20 @@ interface ShiftData {
   status: 'POSTED' | 'CLAIMED' | 'APPROVED' | 'DECLINED' | 'CANCELLED'
   reason?: string
   version: number
-  originalOwner: { id: string; name: string; staffRole?: string }
-  claimedBy?: { id: string; name: string; staffRole?: string }
+  requiredRoleId?: string
+  requiredRole?: { id: string; name: string }
+  originalOwner: { id: string; name: string; staffRole?: string; orgRoles?: { id: string; name: string }[] }
+  claimedBy?: { id: string; name: string; staffRole?: string; orgRoles?: { id: string; name: string }[] }
   postedBy: { id: string; name: string }
   claimedAt?: string
   approvedAt?: string
   createdAt: string
+}
+
+interface OrgRoleData {
+  id: string
+  name: string
+  memberCount: number
 }
 
 interface LogEntry {
@@ -162,11 +171,12 @@ export function useMembers() {
   return { members, loading, fetchMembers, removeMember }
 }
 
-export function useShifts(pollInterval = 5000) {
+export function useShifts(pollInterval = 15000) {
   const [shifts, setShifts] = useState<ShiftData[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const lastFetchRef = useRef<number>(0)
 
   const fetchShifts = useCallback(async () => {
     try {
@@ -174,6 +184,7 @@ export function useShifts(pollInterval = 5000) {
       if (res.ok && res.data) {
         setShifts(res.data.shifts)
         setError(null)
+        lastFetchRef.current = Date.now()
       }
     } catch {
       setError('Failed to load shifts')
@@ -182,13 +193,41 @@ export function useShifts(pollInterval = 5000) {
     }
   }, [])
 
+  // Start/stop polling based on page visibility
+  const startPolling = useCallback(() => {
+    if (intervalRef.current) clearInterval(intervalRef.current)
+    intervalRef.current = setInterval(fetchShifts, pollInterval)
+  }, [fetchShifts, pollInterval])
+
+  const stopPolling = useCallback(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+  }, [])
+
   useEffect(() => {
     fetchShifts()
-    intervalRef.current = setInterval(fetchShifts, pollInterval)
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
+    startPolling()
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        // If tab was hidden for more than 5s, refetch immediately
+        if (Date.now() - lastFetchRef.current > 5000) {
+          fetchShifts()
+        }
+        startPolling()
+      } else {
+        stopPolling()
+      }
     }
-  }, [fetchShifts, pollInterval])
+
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => {
+      stopPolling()
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
+  }, [fetchShifts, startPolling, stopPolling])
 
   const postShift = useCallback(async (data: {
     title: string
@@ -197,6 +236,7 @@ export function useShifts(pollInterval = 5000) {
     endTime: string
     reason?: string
     originalOwnerId: string
+    requiredRoleId?: string
   }) => {
     const res = await api<{ shift: ShiftData }>('/api/shifts', {
       method: 'POST',
@@ -260,6 +300,47 @@ export function useChangelog() {
   return { logs, loading, fetchLogs }
 }
 
+export function useRoles() {
+  const [roles, setRoles] = useState<OrgRoleData[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const fetchRoles = useCallback(async () => {
+    const res = await api<{ roles: OrgRoleData[] }>('/api/roles')
+    if (res.ok && res.data) setRoles(res.data.roles)
+    setLoading(false)
+  }, [])
+
+  const addRole = useCallback(async (name: string) => {
+    const res = await api<{ role: OrgRoleData }>('/api/roles', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    })
+    if (res.ok) await fetchRoles()
+    return res
+  }, [fetchRoles])
+
+  const deleteRole = useCallback(async (roleId: string) => {
+    const res = await api('/api/roles', {
+      method: 'DELETE',
+      body: JSON.stringify({ roleId }),
+    })
+    if (res.ok) await fetchRoles()
+    return res
+  }, [fetchRoles])
+
+  const updateMyRoles = useCallback(async (roleIds: string[]) => {
+    const res = await api('/api/roles', {
+      method: 'PATCH',
+      body: JSON.stringify({ roleIds }),
+    })
+    return res
+  }, [])
+
+  useEffect(() => { fetchRoles() }, [fetchRoles])
+
+  return { roles, loading, fetchRoles, addRole, deleteRole, updateMyRoles }
+}
+
 export function usePushNotifications(memberId?: string) {
   const [supported, setSupported] = useState(false)
   const [subscribed, setSubscribed] = useState(false)
@@ -297,4 +378,4 @@ export function usePushNotifications(memberId?: string) {
   return { supported, subscribed, subscribe }
 }
 
-export type { SessionData, OrgData, MemberData, ShiftData, LogEntry }
+export type { SessionData, OrgData, MemberData, ShiftData, LogEntry, OrgRoleData }

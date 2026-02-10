@@ -84,3 +84,38 @@ export async function sendNotificationToOrg(
 
   return results
 }
+
+/**
+ * Send notifications only to staff members who have a specific OrgRole assigned.
+ * Falls back to all staff if no members have the role.
+ */
+export async function sendNotificationToMembersByOrgRole(
+  organisationId: string,
+  orgRoleId: string,
+  payload: NotificationPayload,
+  excludeMemberId?: string
+) {
+  // Find staff members with this org role assigned
+  const memberRoles = await prisma.memberOrgRole.findMany({
+    where: {
+      orgRoleId,
+      member: {
+        organisationId,
+        role: 'STAFF',
+        ...(excludeMemberId ? { id: { not: excludeMemberId } } : {}),
+      },
+    },
+    select: { memberId: true },
+  })
+
+  // If no members have this role, fall back to notifying all staff
+  if (memberRoles.length === 0) {
+    return sendNotificationToRole(organisationId, 'STAFF', payload, excludeMemberId)
+  }
+
+  const results = await Promise.allSettled(
+    memberRoles.map((mr) => sendNotificationToMember(mr.memberId, payload))
+  )
+
+  return results
+}

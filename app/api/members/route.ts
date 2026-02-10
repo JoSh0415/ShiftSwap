@@ -18,11 +18,22 @@ export async function GET() {
         role: true,
         staffRole: true,
         createdAt: true,
+        memberOrgRoles: {
+          select: {
+            orgRole: { select: { id: true, name: true } },
+          },
+        },
       },
       orderBy: [{ role: 'asc' }, { name: 'asc' }],
     })
 
-    return success({ members })
+    return success({
+      members: members.map((m) => ({
+        ...m,
+        orgRoles: m.memberOrgRoles.map((mr) => mr.orgRole),
+        memberOrgRoles: undefined,
+      })),
+    })
   } catch (e: unknown) {
     console.error('Get members error:', e)
     return error('Internal server error', 500)

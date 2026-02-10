@@ -99,10 +99,11 @@ async function joinOrganisation(body: {
   email: string
   password: string
   staffRole: string
+  selectedRoleIds?: string[]
 }) {
-  const { joinCode, name, email, password, staffRole } = body
+  const { joinCode, name, email, password, staffRole, selectedRoleIds } = body
 
-  if (!joinCode || !name || !email || !password || !staffRole) {
+  if (!joinCode || !name || !email || !password) {
     return error('All fields are required')
   }
   if (password.length < 6) {
@@ -134,6 +135,22 @@ async function joinOrganisation(body: {
       organisationId: org.id,
     },
   })
+
+  // Assign org roles if provided
+  if (selectedRoleIds && selectedRoleIds.length > 0) {
+    const validRoles = await prisma.orgRole.findMany({
+      where: { id: { in: selectedRoleIds }, organisationId: org.id },
+      select: { id: true },
+    })
+    if (validRoles.length > 0) {
+      await prisma.memberOrgRole.createMany({
+        data: validRoles.map((r) => ({
+          memberId: member.id,
+          orgRoleId: r.id,
+        })),
+      })
+    }
+  }
 
   const token = createToken({
     memberId: member.id,
